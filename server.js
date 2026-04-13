@@ -149,7 +149,32 @@ async function generateTicketImage(ticketId, qrPayload, buyerName, buyerEmail) {
   }
 
   var resultBuffer = await base.getBufferAsync(Jimp.MIME_PNG);
-  return resultBuffer.toString("base64");
+
+  // Upload to Supabase Storage (bucket: cyclone)
+  var fileName = ticketId + ".png";
+  try {
+    var uploadResult = await supabase.storage
+      .from("cyclone")
+      .upload(fileName, resultBuffer, {
+        contentType: "image/png",
+        upsert: true,
+      });
+
+    if (uploadResult.error) {
+      console.error("Storage upload error:", uploadResult.error.message);
+      return { url: null, base64: resultBuffer.toString("base64") };
+    }
+
+    var publicUrl = supabase.storage
+      .from("cyclone")
+      .getPublicUrl(fileName).data.publicUrl;
+
+    console.log("Ticket image uploaded: " + publicUrl);
+    return { url: publicUrl, base64: null };
+  } catch (uploadErr) {
+    console.error("Storage upload failed:", uploadErr.message);
+    return { url: null, base64: resultBuffer.toString("base64") };
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -225,7 +250,7 @@ async function createAndSendTicket(opts) {
     ticketId: ticketId,
     eventId: opts.eventId,
   });
-  var ticketBase64 = await generateTicketImage(ticketId, qrPayload, opts.name, opts.email);
+  var ticketImage = await generateTicketImage(ticketId, qrPayload, opts.name, opts.email);
 
   var dbResult = await supabase.from("tickets").insert({
     id: ticketId,
@@ -254,7 +279,8 @@ async function createAndSendTicket(opts) {
       eventName: eventName,
       eventDate: eventDate,
       eventVenue: eventVenue,
-      ticketBase64: ticketBase64,
+      ticketImageUrl: ticketImage.url,
+      ticketBase64: ticketImage.base64,
       ticketIndex: opts.ticketIndex,
       totalTickets: opts.totalTickets,
     });
@@ -275,6 +301,9 @@ async function sendTicketEmail(opts) {
     opts.totalTickets > 1
       ? "Ingresso " + opts.ticketIndex + " de " + opts.totalTickets
       : "";
+  var imgSrc = opts.ticketImageUrl
+    ? opts.ticketImageUrl
+    : "data:image/png;base64," + opts.ticketBase64;
   var html =
     "<!DOCTYPE html><html><head><meta charset='UTF-8'></head><body style='margin:0;padding:0;background:#0a0a0a;font-family:Helvetica,Arial,sans-serif;'>" +
     "<table width='100%' cellpadding='0' cellspacing='0' style='background:#0a0a0a;padding:32px 16px;'><tr><td align='center'>" +
@@ -300,9 +329,7 @@ async function sendTicketEmail(opts) {
         multi +
         "</p>"
       : "") +
-    "<img src='data:image/png;base64," +
-    opts.ticketBase64 +
-    "' width='400' style='max-width:100%;border-radius:12px;display:block;margin:0 auto 24px;' alt='Ingresso' />" +
+    "<img src='" + imgSrc + "' width='400' style='max-width:100%;border-radius:12px;display:block;margin:0 auto 24px;' alt='Ingresso' />" +
     "<p style='color:#555;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin:0 0 4px;'>Codigo do Ingresso</p>" +
     "<p style='color:#c8102e;font-size:16px;font-weight:800;letter-spacing:2px;font-family:monospace;margin:0 0 28px;'>" +
     opts.ticketId +
@@ -446,7 +473,7 @@ app.post("/api/tickets/:id/resend", requireAdmin, async function (req, res) {
     .single();
   var ev = er.data;
 
-  var ticketBase64 = await generateTicketImage(ticket.id, ticket.qr_data, ticket.buyer_name, ticket.buyer_email);
+  var ticketImage = await generateTicketImage(ticket.id, ticket.qr_data, ticket.buyer_name, ticket.buyer_email);
   await sendTicketEmail({
     to: ticket.buyer_email,
     name: ticket.buyer_name,
@@ -454,7 +481,8 @@ app.post("/api/tickets/:id/resend", requireAdmin, async function (req, res) {
     eventName: ev ? ev.name : "Cyclone Brazil",
     eventDate: ev ? ev.date : "",
     eventVenue: ev ? ev.venue : "",
-    ticketBase64: ticketBase64,
+    ticketImageUrl: ticketImage.url,
+    ticketBase64: ticketImage.base64,
     ticketIndex: ticket.ticket_index || 1,
     totalTickets: ticket.total_tickets || 1,
   });
