@@ -106,7 +106,7 @@ function verifySquareSignature(req) {
   return hmac === signature;
 }
 
-async function generateTicketImage(ticketId, qrPayload) {
+async function generateTicketImage(ticketId, qrPayload, buyerName, buyerEmail) {
   var qrBuffer = await QRCode.toBuffer(qrPayload, {
     width: QR_SIZE,
     margin: 1,
@@ -116,6 +116,38 @@ async function generateTicketImage(ticketId, qrPayload) {
   var base = await Jimp.read(TICKET_BASE_PATH);
   var qrImg = await Jimp.read(qrBuffer);
   base.composite(qrImg, QR_X, QR_Y);
+
+  // Print buyer name and email below the QR code
+  try {
+    var fontName = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+    var fontEmail = await Jimp.loadFont(Jimp.FONT_SANS_12_WHITE);
+
+    var textAreaX = QR_X - 20;
+    var textAreaW = QR_SIZE + 40;
+
+    if (buyerName) {
+      base.print(
+        fontName,
+        textAreaX,
+        QR_Y + QR_SIZE + 12,
+        { text: buyerName, alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER },
+        textAreaW
+      );
+    }
+
+    if (buyerEmail) {
+      base.print(
+        fontEmail,
+        textAreaX,
+        QR_Y + QR_SIZE + 34,
+        { text: buyerEmail, alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER },
+        textAreaW
+      );
+    }
+  } catch (fontErr) {
+    console.error("Font loading error (ticket still generated):", fontErr.message);
+  }
+
   var resultBuffer = await base.getBufferAsync(Jimp.MIME_PNG);
   return resultBuffer.toString("base64");
 }
@@ -193,7 +225,7 @@ async function createAndSendTicket(opts) {
     ticketId: ticketId,
     eventId: opts.eventId,
   });
-  var ticketBase64 = await generateTicketImage(ticketId, qrPayload);
+  var ticketBase64 = await generateTicketImage(ticketId, qrPayload, opts.name, opts.email);
 
   var dbResult = await supabase.from("tickets").insert({
     id: ticketId,
@@ -414,7 +446,7 @@ app.post("/api/tickets/:id/resend", requireAdmin, async function (req, res) {
     .single();
   var ev = er.data;
 
-  var ticketBase64 = await generateTicketImage(ticket.id, ticket.qr_data);
+  var ticketBase64 = await generateTicketImage(ticket.id, ticket.qr_data, ticket.buyer_name, ticket.buyer_email);
   await sendTicketEmail({
     to: ticket.buyer_email,
     name: ticket.buyer_name,
@@ -427,6 +459,46 @@ app.post("/api/tickets/:id/resend", requireAdmin, async function (req, res) {
     totalTickets: ticket.total_tickets || 1,
   });
   res.json({ sent: true });
+});
+
+// ══════════════════════════════════════════════
+// MANUAL TICKET CREATION — for existing buyers
+// ══════════════════════════════════════════════
+app.post("/api/tickets/send-manual", requireAdmin, async function (req, res) {
+  var b = req.body;
+  if (!b.email || !b.eventId || !b.quantity) {
+    return res.status(400).json({ error: "email, eventId, and quantity are required" });
+  }
+
+  var quantity = parseInt(b.quantity, 10);
+  if (isNaN(quantity) || quantity < 1 || quantity > 20) {
+    return res.status(400).json({ error: "Quantity must be between 1 and 20" });
+  }
+
+  var sentTickets = [];
+  try {
+    for (var i = 0; i < quantity; i++) {
+      var ticketId = await createAndSendTicket({
+        email: b.email.trim(),
+        name: (b.name || "Convidado").trim(),
+        eventId: b.eventId,
+        orderId: "MANUAL-" + Date.now(),
+        paymentId: "MANUAL",
+        ticketIndex: i + 1,
+        totalTickets: quantity,
+      });
+      sentTickets.push(ticketId);
+    }
+    res.json({ success: true, tickets: sentTickets, count: sentTickets.length });
+  } catch (err) {
+    console.error("Manual ticket error:", err);
+    res.json({
+      success: false,
+      tickets: sentTickets,
+      count: sentTickets.length,
+      error: err.message,
+    });
+  }
 });
 
 // ══════════════════════════════════════════════
