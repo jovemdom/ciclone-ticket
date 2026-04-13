@@ -1060,7 +1060,7 @@ pedro@email.com, Pedro Costa, 3" style="width:100%;background:var(--surface2);bo
     </div>
     <div style="display:flex;gap:12px;margin-top:24px;">
       <button class="btn btn-ghost" style="flex:1;" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" style="flex:1;" onclick="createEvent()">Criar Evento</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="submitNewEvent()">Criar Evento</button>
     </div>
   </div>
 </div>
@@ -1513,7 +1513,7 @@ function closeModal() {
   document.getElementById('event-modal').classList.remove('open');
 }
 
-async function createEvent() {
+async function submitNewEvent() {
   var name = document.getElementById('ev-name').value;
   var date = document.getElementById('ev-date').value;
   var venue = document.getElementById('ev-venue').value;
